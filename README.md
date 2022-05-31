@@ -1,1 +1,2 @@
 # ProjetoSO
+#INFORMATIONS FOR US TO READ:
