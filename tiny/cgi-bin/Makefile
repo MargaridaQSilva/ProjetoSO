@@ -1,5 +1,9 @@
 CC = gcc
+
+#Release
 CFLAGS = -O2 -Wall -I ..
+#Debug
+#CFLAGS = -g -Wall -I ..
 
 all: adder
 
