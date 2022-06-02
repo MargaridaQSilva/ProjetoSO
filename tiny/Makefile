@@ -29,7 +29,7 @@ client: client.c
 	
 
 clean:
-	rm -f *.o tiny *~
+	rm -f *.o tiny client *~
 	(cd cgi-bin; make clean)
 	(cd libtomcrypt ; make clean)
 

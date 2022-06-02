@@ -4,7 +4,7 @@ Paul Crocker
 Muitas Modificações 
 */
 //Definir sta linha com 1 ou com 0 se não quiser ver as linhas com debug info.
-#define DEBUG 0
+#define DEBUG 1
 
 #include <arpa/inet.h>
 #include <assert.h>
@@ -108,10 +108,11 @@ int main(int argc, char** argv) {
 
     //Ler o resto da resposta - o corpo de resposta.
     //Vamos ler em blocos caso que seja uma resposta grande.
+    if (DEBUG) fprintf(stderr, "debug: before a block read\n");
     while ((nbytes = Rio_readn(socket_file_descriptor, buffer, BUFSIZ)) > 0) {
          if (DEBUG) fprintf(stderr, "debug: after a block read\n");
         //commentar a lina seguinte se não quiser ver o output
-         Rio_writen(STDOUT_FILENO, buffer, nbytes);
+        Rio_writen(STDOUT_FILENO, buffer, nbytes);
     }
 
     if (DEBUG) fprintf(stderr, "debug: after last read\n");
