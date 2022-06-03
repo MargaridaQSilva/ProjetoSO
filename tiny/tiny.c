@@ -9,7 +9,7 @@
  */
 #include "csapp.h"
 
-void doit (int fd);
+void *doit (void*p_fd);
 void read_requesthdrs (rio_t * rp);
 int parse_uri (char *uri, char *filename, char *cgiargs);
 void serve_static (int fd, char *filename, int filesize);
@@ -40,9 +40,13 @@ int main (int argc, char **argv)
     {
       clientlen = sizeof (clientaddr);
       connfd = Accept (listenfd, (SA *) & clientaddr, &clientlen);	//line:netp:tiny:accept
-      doit (connfd);		//line:netp:tiny:doit
-      Close (connfd);		//line:netp:tiny:close
+      pthread_t t;
+      int *pclient=malloc(sizeof(int));//client socket
+      *pclient=connfd;
+      pthread_create(&t,NULL,doit,pclient);
+      //Close (connfd);		//line:netp:tiny:close ->retirei este close devido ao erro Rio_readlineb error: Bad file descriptor
     }
+    return 0;
 }
 
 /* $end tinymain */
@@ -51,8 +55,10 @@ int main (int argc, char **argv)
  * doit - handle one HTTP request/response transaction
  */
 /* $begin doit */
-void doit (int fd)
+void *doit (void*p_fd)
 {
+  int fd=*((int*)p_fd);
+  free(p_fd);
   int is_static;
   struct stat sbuf;
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
@@ -66,7 +72,7 @@ void doit (int fd)
   if (strcasecmp (method, "GET"))
     {				//line:netp:doit:beginrequesterr
       clienterror (fd, method, "501", "Not Implemented","Tiny does not implement this method");
-      return;
+      return NULL;
     }				//line:netp:doit:endrequesterr
   read_requesthdrs (&rio);	//line:netp:doit:readrequesthdrs
 
@@ -75,7 +81,7 @@ void doit (int fd)
   if (stat (filename, &sbuf) < 0)
     {				//line:netp:doit:beginnotfound
       clienterror (fd, filename, "404", "Not found", "Tiny couldn't find this file");
-      return;
+      return NULL;
     }				//line:netp:doit:endnotfound
 
   if (is_static)
@@ -83,7 +89,7 @@ void doit (int fd)
       if (!(S_ISREG (sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode))
 	{			//line:netp:doit:readable
 	  clienterror (fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
-	  return;
+	  return NULL;
 	}
       serve_static (fd, filename, sbuf.st_size);	//line:netp:doit:servestatic
     }
@@ -92,10 +98,11 @@ void doit (int fd)
       if (!(S_ISREG (sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
 	{			//line:netp:doit:executable
 	  clienterror (fd, filename, "403", "Forbidden","Tiny couldn't run the CGI program");
-	  return;
+	  return NULL;
 	}
       serve_dynamic (fd, filename, cgiargs);	//line:netp:doit:servedynamic
     }
+    return NULL;
 }
 
 /* $end doit */
