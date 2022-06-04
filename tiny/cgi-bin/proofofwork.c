@@ -1,7 +1,5 @@
-/*
- * adder.c - a minimal CGI program that adds two numbers together
- */
-/* $begin adder */
+
+/* $begin pow */
 #include "csapp.h"
 #include "tomcrypt_hash.h"
 
