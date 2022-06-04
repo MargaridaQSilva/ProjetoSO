@@ -24,20 +24,23 @@ void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
 int numeroRequestStat = 0;
-int threadcount = 0; // THREADMAX = 1;
+int threadcount = 0, THREADMAX = 1;
+sem_t threadcountmutex;
 
 int main(int argc, char **argv) {
+    sem_init(&threadcountmutex, 0, 1);
     int listenfd, connfd, port;
     //change to unsigned as sizeof returns unsigned
     struct sockaddr_in clientaddr;
     unsigned int clientlen = sizeof(clientaddr);
 
     /* Check command line args */
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s <port> <size of thread-pool>\n", argv[0]);
         exit(1);
     }
     port = atoi(argv[1]);
+    THREADMAX = atoi(argv[2]);
 
     fprintf(stderr, "Server : %s Running on  <%d>\n", argv[0], port);
 
@@ -68,37 +71,74 @@ void *doit(void *p_fd) {
     char filename[MAXLINE], cgiargs[MAXLINE];
     rio_t rio;
 
+    sem_wait(&threadcountmutex);
+    threadcount++;
+
+    if(threadcount > THREADMAX) // If there is 10 request at the same time, other request will be refused.
+    {
+        clienterror(fd, method, "400", "Bad Request", "Server is busy.");
+        threadcount--;
+        sem_post(&threadcountmutex);
+        Close(fd);
+        pthread_exit(NULL);
+        return NULL;
+    }
+    sem_post(&threadcountmutex);
+
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
     Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
     sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
+    sem_wait(&threadcountmutex);
     if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
         clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
+        threadcount--;
+        sem_post(&threadcountmutex);
+        Close(fd);
         return NULL;
-    }                //line:netp:doit:endrequesterr
+    }
+    sem_post(&threadcountmutex);
+    //line:netp:doit:endrequesterr
     read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs
 
     /* Parse URI from GET request */
     is_static = parse_uri(uri, filename, cgiargs);    //line:netp:doit:staticcheck
+    sem_wait(&threadcountmutex);
     if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
         clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
+        threadcount--;
+        sem_post(&threadcountmutex);
+        Close(fd);
         return NULL;
     }                //line:netp:doit:endnotfound
-
-    if (is_static) {                /* Serve static content */
+    sem_post(&threadcountmutex);
+    if (is_static) {/* Serve static content */
+        sem_wait(&threadcountmutex);
         if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {            //line:netp:doit:readable
             clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
+            threadcount--;
+            sem_post(&threadcountmutex);
+            Close(fd);
             return NULL;
         }
+        sem_post(&threadcountmutex);
         serve_static(fd, filename, sbuf.st_size);    //line:netp:doit:servestatic
     } else {                /* Serve dynamic content */
+        sem_wait(&threadcountmutex);
         if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {            //line:netp:doit:executable
             clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
+            threadcount--;
+            sem_post(&threadcountmutex);
+            Close(fd);
             return NULL;
         }
+        sem_post(&threadcountmutex);
         serve_dynamic(fd, filename, cgiargs);    //line:netp:doit:servedynamic
     }
     Close(fd);
+    sem_wait(&threadcountmutex);
+    threadcount--;
+    sem_post(&threadcountmutex);
     pthread_exit(NULL);
     return NULL;
 }
