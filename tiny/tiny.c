@@ -128,8 +128,7 @@ void *doit(void *args) {
         if (queue_activesize >= queue_maxsize) {
             clienterror(fd, method, "400", "Bad Request", "Server is busy.");
             Close(fd);
-            pthread_exit(NULL);
-            return NULL;
+            continue;
         }
 
         /* Read request line and headers */
@@ -142,7 +141,7 @@ void *doit(void *args) {
 
 
             Close(fd);
-            return NULL;
+            continue;
         }
 
         //line:netp:doit:endrequesterr
@@ -150,18 +149,21 @@ void *doit(void *args) {
 
         /* Parse URI from GET request */
         is_static = parse_uri(uri, filename, cgiargs);    //line:netp:doit:staticcheck
-
+        printf("DEBUG: THREAD before namecheck\n");
+        fflush(stdout);
         if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
             clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
-
             Close(fd);
-            return NULL;
+            continue;
         }                //line:netp:doit:endnotfound
+        printf("DEBUG: THREAD after namecheck\n");
+        fflush(stdout);
+
         if (is_static) {/* Serve static content */
             if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {            //line:netp:doit:readable
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
                 Close(fd);
-                return NULL;
+                continue;
             }
             serve_static(fd, filename, sbuf.st_size);    //line:netp:doit:servestatic
         } else {                /* Serve dynamic content */
@@ -169,12 +171,14 @@ void *doit(void *args) {
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
 
                 Close(fd);
-                return NULL;
+                continue;
             }
 
             serve_dynamic(fd, filename, cgiargs);    //line:netp:doit:servedynamic
         }
+
         Close(fd);
+
         //sem_post(&threadend);
     }
 }
