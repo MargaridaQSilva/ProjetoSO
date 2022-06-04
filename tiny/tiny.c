@@ -23,34 +23,80 @@ void serve_dynamic(int fd, char *filename, char *cgiargs);
 
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
+queue_element_t *queue_element;
+queue_element_t NULL_ELEMENT;
+
 int numeroRequestStat = 0;
-int threadcount = 0, THREADMAX = 1;
-sem_t threadcountmutex;
+int THREADMAX = 1;
+int queue_activesize = 0;
+int queue_maxsize = 0;
+int algorithm = 0; //0 - ANY/FIFO 1 - HPSC  2 - HPDC
+sem_t qsizemutex;
+sem_t threadmutex;
+sem_t threadend;
 
 int main(int argc, char **argv) {
-    sem_init(&threadcountmutex, 0, 1);
+    NULL_ELEMENT.fd = 0;
+    NULL_ELEMENT.isstatic = 0;
+    sem_init(&qsizemutex, 0, 1);
+    sem_init(&threadmutex, 0, 0);
+    sem_init(&threadend, 0, 1);
     int listenfd, connfd, port;
     //change to unsigned as sizeof returns unsigned
     struct sockaddr_in clientaddr;
     unsigned int clientlen = sizeof(clientaddr);
 
+
     /* Check command line args */
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <port> <size of thread-pool>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "usage: %s <port> <size of thread-pool> <buffer size> <algorithm (ANY/FIFO, HPSC, HPDC)>\n",
+                argv[0]);
         exit(1);
     }
     port = atoi(argv[1]);
     THREADMAX = atoi(argv[2]);
+    queue_maxsize = atoi(argv[3]);
+    queue_element_t arraytemp[queue_maxsize];
+    queue_element = arraytemp;
+    if (strcmp(argv[4], "HPSC") == 0) {
+        algorithm = 1;
+    } else if (strcmp(argv[4], "HPDC") == 0) {
+        algorithm = 2;
+    } else {
+        algorithm = 0;
+    }
+
+    //CREATE THREAD POOL
+
+    pthread_t threadpool[THREADMAX];
+    int ids[THREADMAX];
+
+    for (int i = 0; i < THREADMAX; i++) {
+        ids[i] = i;
+    }
+
+    for (int i = 0; i < THREADMAX; i++) {
+        pthread_create(&threadpool[i], NULL, doit, &ids[i]);
+    }
+
 
     fprintf(stderr, "Server : %s Running on  <%d>\n", argv[0], port);
 
     listenfd = Open_listenfd(port);
     while (connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen)) {
+
         //line:netp:tiny:accept  oldline - connfd = Accept (listenfd, (SA *) & clientaddr, &clientlen);
-        pthread_t t;
+        //pthread_t t;
         int *pclient = malloc(sizeof(int));//client socket
+
         *pclient = connfd;
-        pthread_create(&t, NULL, doit, pclient);
+        insertq(queue_element, *pclient, 1);
+        fflush(stdout);
+
+        //is static doesnt matter for FIFO, the only method currently implemented
+        //sem_wait(&threadend);
+        sem_post(&threadmutex);
+        //pthread_create(&t, NULL, doit, pclient);
         //Close(connfd);        //line:netp:tiny:close ->retirei este close devido ao erro Rio_readlineb error: Bad file descriptor
     }
     return 0;
@@ -62,85 +108,75 @@ int main(int argc, char **argv) {
  * doit - handle one HTTP request/response transaction
  */
 /* $begin doit */
-void *doit(void *p_fd) {
-    int fd = *((int *) p_fd);
-    free(p_fd);
-    int is_static;
-    struct stat sbuf;
-    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
-    char filename[MAXLINE], cgiargs[MAXLINE];
-    rio_t rio;
+void *doit(void *args) {
+    while (1) {
+        sem_wait(&threadmutex);
+        queue_element_t element;
 
-    sem_wait(&threadcountmutex);
-    threadcount++;
+        int id = *(int *) args;
+        element = selector(queue_element);
+        int fd = element.fd;
+        printf("FD %d id %d", fd, id);
+        //free(p_fd);
+        int is_static;
+        struct stat sbuf;
+        char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+        char filename[MAXLINE], cgiargs[MAXLINE];
+        rio_t rio;
 
-    if(threadcount > THREADMAX) // If there is 10 request at the same time, other request will be refused.
-    {
-        clienterror(fd, method, "400", "Bad Request", "Server is busy.");
-        threadcount--;
-        sem_post(&threadcountmutex);
-        Close(fd);
-        pthread_exit(NULL);
-        return NULL;
-    }
-    sem_post(&threadcountmutex);
 
-    /* Read request line and headers */
-    Rio_readinitb(&rio, fd);
-    Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
-    sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
-    sem_wait(&threadcountmutex);
-    if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
-        clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
-        threadcount--;
-        sem_post(&threadcountmutex);
-        Close(fd);
-        return NULL;
-    }
-    sem_post(&threadcountmutex);
-    //line:netp:doit:endrequesterr
-    read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs
+        if (queue_activesize >= queue_maxsize) {
+            clienterror(fd, method, "400", "Bad Request", "Server is busy.");
+            Close(fd);
+            pthread_exit(NULL);
+            return NULL;
+        }
 
-    /* Parse URI from GET request */
-    is_static = parse_uri(uri, filename, cgiargs);    //line:netp:doit:staticcheck
-    sem_wait(&threadcountmutex);
-    if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
-        clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
-        threadcount--;
-        sem_post(&threadcountmutex);
-        Close(fd);
-        return NULL;
-    }                //line:netp:doit:endnotfound
-    sem_post(&threadcountmutex);
-    if (is_static) {/* Serve static content */
-        sem_wait(&threadcountmutex);
-        if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {            //line:netp:doit:readable
-            clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
-            threadcount--;
-            sem_post(&threadcountmutex);
+        /* Read request line and headers */
+        Rio_readinitb(&rio, fd);
+        Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
+        sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
+
+        if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
+            clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
+
+
             Close(fd);
             return NULL;
         }
-        sem_post(&threadcountmutex);
-        serve_static(fd, filename, sbuf.st_size);    //line:netp:doit:servestatic
-    } else {                /* Serve dynamic content */
-        sem_wait(&threadcountmutex);
-        if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {            //line:netp:doit:executable
-            clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
-            threadcount--;
-            sem_post(&threadcountmutex);
+
+        //line:netp:doit:endrequesterr
+        read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs
+
+        /* Parse URI from GET request */
+        is_static = parse_uri(uri, filename, cgiargs);    //line:netp:doit:staticcheck
+
+        if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
+            clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
+
             Close(fd);
             return NULL;
+        }                //line:netp:doit:endnotfound
+        if (is_static) {/* Serve static content */
+            if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {            //line:netp:doit:readable
+                clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
+                Close(fd);
+                return NULL;
+            }
+            serve_static(fd, filename, sbuf.st_size);    //line:netp:doit:servestatic
+        } else {                /* Serve dynamic content */
+            if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {            //line:netp:doit:executable
+                clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
+
+                Close(fd);
+                return NULL;
+            }
+
+            serve_dynamic(fd, filename, cgiargs);    //line:netp:doit:servedynamic
         }
-        sem_post(&threadcountmutex);
-        serve_dynamic(fd, filename, cgiargs);    //line:netp:doit:servedynamic
+        Close(fd);
+        //sem_post(&threadend);
     }
-    Close(fd);
-    sem_wait(&threadcountmutex);
-    threadcount--;
-    sem_post(&threadcountmutex);
-    pthread_exit(NULL);
-    return NULL;
 }
 
 /* $end doit */
@@ -312,3 +348,52 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 }
 
 /* $end clienterror */
+
+/* queue manipulation */
+
+queue_element_t selector(queue_element_t *queue) {
+    int index;
+    queue_element_t out;
+    if (algorithm == 1) {
+        // STATIC IS HIGH PRIO
+    } else if (algorithm == 2) {
+        //DYNAMIC IS HIGH PRIO
+    } else {
+        queue_element_t out = queue[0];
+        removeq(queue);
+        return out;
+
+    }
+
+}
+
+void removeq(queue_element_t *queue) { // ONLY WORKS FOR FIFO
+    sem_wait(&qsizemutex);
+    for (int i = 0; i + 1 <= queue_activesize; i++) {
+        if (i - 1 == queue_activesize) { // OUT OF BOUNDS
+            printf("\nremoving if, i %d as %d\n", i, queue_activesize);
+            fflush(stdout);
+            queue[i] = queue[i + 1];
+        } else {
+            printf("\nelse i %d\n", i);
+            fflush(stdout);
+            queue[i] = NULL_ELEMENT;
+        }
+    }
+    queue_activesize--;
+    sem_post(&qsizemutex);
+    return NULL;
+}
+
+void insertq(queue_element_t *queue, int fd, int isstatic) { //ONLY WORKS FOR FIFO
+
+    queue_element_t element;
+    element.fd = fd;
+    element.isstatic = isstatic;
+    sem_wait(&qsizemutex);
+    queue[queue_activesize] = element;
+    queue_activesize++;
+    sem_post(&qsizemutex);
+
+    return NULL;
+}

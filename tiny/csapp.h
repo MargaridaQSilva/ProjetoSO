@@ -47,6 +47,19 @@ typedef struct {
 } rio_t;
 /* $end rio_t */
 
+/* REQUEST QUEUE STRUCT */
+typedef struct {
+    int fd; // holds file descriptor
+    int isstatic; // is static? 0 - false ; 1 - true
+} queue_element_t;
+
+/* THREAD ARGUMENT STRUCT */
+
+typedef struct {
+    queue_element_t *queue;
+    int id;
+} threadargs_t; //CLEAN THIS UP, RIGHT NOW UNUSED
+
 /* External variables */
 extern int h_errno;    /* defined by BIND for DNS errors */ 
 extern char **environ; /* defined by libc */
@@ -163,7 +176,13 @@ int open_listenfd(int portno);
 
 /* Wrappers for client/server helper functions */
 int Open_clientfd(char *hostname, int port);
-int Open_listenfd(int port); 
+int Open_listenfd(int port);
+
+/* declaration of queue manip functions */
+
+void removeq(queue_element_t* queue);
+void insertq(queue_element_t* queue, int fd, int isstatic);
+queue_element_t selector(queue_element_t* queue);
 
 #endif /* __CSAPP_H__ */
 /* $end csapp.h */
