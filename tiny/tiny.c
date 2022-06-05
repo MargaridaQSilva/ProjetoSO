@@ -82,6 +82,10 @@ int main(int argc, char **argv) {
     } else {
         algorithm = 0;
     }
+    if(THREADMAX <= 0 || queue_maxsize <= 0){
+        fprintf(stderr, "Error - size of thread-pool and size of buffer must both be > 0\n");
+        exit(1);
+    }
 
     //CREATE THREAD POOL
 
