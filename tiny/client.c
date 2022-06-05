@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
     pthread_barrier_init(&barrier, NULL, THREADMAX);
+
     pthread_t threadpool[THREADMAX];
     int ids[THREADMAX];
 
@@ -87,10 +88,13 @@ int main(int argc, char **argv) {
     for (int i = 0; i < THREADMAX; i++) {
         pthread_create(&threadpool[i], NULL, requestfunc, &ids[i]);
     }
-
     while(schedalg == 1){
         sem_post(&threadmutex);
         sem_wait(&threadend);
+    }
+
+    while(1){
+        //do nothing, so parent process doesnt die and take threads with it
     }
 
     /* OLD CLIENT, MOVED TO EACH THREAD
