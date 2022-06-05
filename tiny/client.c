@@ -3,6 +3,9 @@
 Paul Crocker
 Muitas Modificações 
 */
+
+/* Afonso Oliveira (44404), Margarida Silva (43367), Ruben Abadesso (43664) @ UBI */
+
 //Definir sta linha com 1 ou com 0 se não quiser ver as linhas com debug info.
 #define DEBUG 0
 

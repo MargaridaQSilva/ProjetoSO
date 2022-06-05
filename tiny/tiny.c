@@ -7,6 +7,9 @@
  Modified by Paul
 
  */
+
+/* Afonso Oliveira (44404), Margarida Silva (43367), Ruben Abadesso (43664) @ UBI */
+
 #include "csapp.h"
 
 void *doit(void *p_fd);
