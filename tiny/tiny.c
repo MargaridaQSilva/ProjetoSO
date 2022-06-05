@@ -5,7 +5,7 @@
  
  Fom csapp
  Modified by Paul
- 
+
  */
 #include "csapp.h"
 
@@ -44,7 +44,6 @@ int main(int argc, char **argv) {
     gettimeofday(&starttime, NULL);
     int arrival_count = 0;
     struct timeval arrival_time;
-
     rio_t nullrio;
     NULL_ELEMENT.fd = 0;
     NULL_ELEMENT.isstatic = 0;
@@ -59,7 +58,6 @@ int main(int argc, char **argv) {
     sem_init(&threadmutex, 0, 0);
     sem_init(&threadstats, 0, 1);
     int listenfd, connfd, port;
-    //change to unsigned as sizeof returns unsigned
     struct sockaddr_in clientaddr;
     unsigned int clientlen = sizeof(clientaddr);
 
@@ -82,7 +80,7 @@ int main(int argc, char **argv) {
     } else {
         algorithm = 0;
     }
-    if(THREADMAX <= 0 || queue_maxsize <= 0){
+    if (THREADMAX <= 0 || queue_maxsize <= 0) {
         fprintf(stderr, "Error - size of thread-pool and size of buffer must both be > 0\n");
         exit(1);
     }
@@ -112,10 +110,6 @@ int main(int argc, char **argv) {
         printf("Stat-req-arrival-count - %d\n", arrival_count);
         printf("Stat-req-arrival-time - %ld seconds %ld microseconds\n", arrival_time.tv_sec, arrival_time.tv_usec);
 
-
-
-        //line:netp:tiny:accept  oldline - connfd = Accept (listenfd, (SA *) & clientaddr, &clientlen);
-        //pthread_t t;
         int *pclient = malloc(sizeof(int));//client socket
 
         *pclient = connfd;
@@ -124,12 +118,8 @@ int main(int argc, char **argv) {
             Close(*pclient);
             continue;
         }
-
         insertq(queue_element, *pclient);
-
         sem_post(&threadmutex);
-        //pthread_create(&t, NULL, doit, pclient);
-        //Close(connfd);        //line:netp:tiny:close ->retirei este close devido ao erro Rio_readlineb error: Bad file descriptor
     }
     return 0;
 }
@@ -151,9 +141,8 @@ void *doit(void *args) {
         int id = *(int *) args;
         element = selector(queue_element);
         int fd = element.fd;
-        //free(p_fd);
         int is_static = element.isstatic;
-
+        printf("FD %d ID %d", fd, id);
         fflush(stdout);
         struct stat sbuf;
         char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
@@ -167,19 +156,6 @@ void *doit(void *args) {
         strcpy(cgiargs, element.cgiargs);
 
 
-
-
-        /*if (queue_activesize >= queue_maxsize) {
-            clienterror(fd, method, "400", "Bad Request", "Server is busy.");
-            Close(fd);
-            continue;
-        }*/
-
-        /* Read request line and headers */
-        /*Rio_readinitb(&rio, fd);
-        Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
-        sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
-        */
         if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
             clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
             sem_wait(&threadstats);
@@ -187,16 +163,12 @@ void *doit(void *args) {
             sem_post(&threadstats);
             gettimeofday(&dispatch_time, NULL);
             dispatch_time = timediff(dispatch_time);
-            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
+            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec,
+                   dispatch_time.tv_usec);
             Close(fd);
             continue;
         }
 
-        //line:netp:doit:endrequesterr
-        //read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs CAUSES DEADLOCK, WHY? moved to insert
-
-        /* Parse URI from GET request */
-        /*is_static = parse_uri(uri, filename, cgiargs);*/    //line:netp:doit:staticcheck
 
         if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
             clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
@@ -205,27 +177,29 @@ void *doit(void *args) {
             sem_post(&threadstats);
             gettimeofday(&dispatch_time, NULL);
             dispatch_time = timediff(dispatch_time);
-            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
+            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec,
+                   dispatch_time.tv_usec);
             Close(fd);
+
             continue;
         }                //line:netp:doit:endnotfound
 
 
-        fflush(stdout);
 
         if (is_static) {/* Serve static content */
 
             if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
                 //line:netp:doit:readable
-                fflush(stdout);
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
                 sem_wait(&threadstats);
                 dispatchcount++;
                 sem_post(&threadstats);
                 gettimeofday(&dispatch_time, NULL);
                 dispatch_time = timediff(dispatch_time);
-                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
+                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id,
+                       dispatch_time.tv_sec, dispatch_time.tv_usec);
                 Close(fd);
+
                 continue;
             }
             printf("Stat-req-complete-count (STATIC ONLY) - %d\n", completecount);
@@ -240,7 +214,8 @@ void *doit(void *args) {
                    "Stat-req-complete-time - %ld seconds %ld microseconds\n"
                    "Stat-thread-count - %d\n"
                    "Stat-thread-static - %d\n"
-                   "Stat-thread-dynamic - %d\n", id, complete_time.tv_sec, complete_time.tv_usec, staticcount+dynamiccount, staticcount, dynamiccount);
+                   "Stat-thread-dynamic - %d\n", id, complete_time.tv_sec, complete_time.tv_usec,
+                   staticcount + dynamiccount, staticcount, dynamiccount);
 
 
         } else {                /* Serve dynamic content */
@@ -251,8 +226,10 @@ void *doit(void *args) {
                 sem_post(&threadstats);
                 gettimeofday(&dispatch_time, NULL);
                 dispatch_time = timediff(dispatch_time);
-                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
+                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id,
+                       dispatch_time.tv_sec, dispatch_time.tv_usec);
                 Close(fd);
+
                 continue;
             }
 
@@ -261,7 +238,7 @@ void *doit(void *args) {
             printf("Thread ID: %d\n"
                    "Stat-thread-count - %d\n"
                    "Stat-thread-static - %d\n"
-                   "Stat-thread-dynamic - %d\n", id, staticcount+dynamiccount, staticcount, dynamiccount);
+                   "Stat-thread-dynamic - %d\n", id, staticcount + dynamiccount, staticcount, dynamiccount);
 
         }
 
@@ -271,7 +248,8 @@ void *doit(void *args) {
         sem_post(&threadstats);
         gettimeofday(&dispatch_time, NULL);
         dispatch_time = timediff(dispatch_time);
-        printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
+        printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec,
+               dispatch_time.tv_usec);
     }
 }
 
@@ -528,7 +506,7 @@ void removeq(queue_element_t *queue, int index) {
     sem_wait(&qsizemutex);
 
     for (int i = index; i + 1 <= queue_activesize; i++) {
-        if (i + 1 == queue_activesize) { // OUT OF BOUNDS
+        if (i + 1 == queue_activesize) {
             queue[i] = NULL_ELEMENT;
         } else {
             queue[i] = queue[i + 1];
@@ -549,7 +527,7 @@ void insertq(queue_element_t *queue, int fd) {
     Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
     sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
     int isstatic = parse_uri(uri, filename, cgiargs);
-    read_requesthdrs(&rio); //works fine here, rio isnt crossing over from q to element properly?
+    read_requesthdrs(&rio);
 
     queue_element_t element;
     strcpy(element.buf, buf);
