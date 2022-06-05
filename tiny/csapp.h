@@ -51,13 +51,15 @@ typedef struct {
 typedef struct {
     int fd; // holds file descriptor
     int isstatic; // is static? 0 - false ; 1 - true
+    char method[8192], uri[8192], version[8192], filename[8192], cgiargs[8192], buf[8192];
+    rio_t rio;
 } queue_element_t;
 
 /* THREAD ARGUMENT STRUCT */
 
 typedef struct {
-    queue_element_t *queue;
     int id;
+
 } threadargs_t; //CLEAN THIS UP, RIGHT NOW UNUSED
 
 /* External variables */
@@ -65,7 +67,7 @@ extern int h_errno;    /* defined by BIND for DNS errors */
 extern char **environ; /* defined by libc */
 
 /* Misc constants */
-#define	MAXLINE	 8192  /* max text line length */
+#define	MAXLINE	 8192  /* max text line length, CARE WHEN CHANGING THIS, CHECK queue_element_t STRUCT DEFINTION */
 #define MAXBUF   8192  /* max I/O buffer size */
 #define LISTENQ  1024  /* second argument to listen() */
 
@@ -180,8 +182,8 @@ int Open_listenfd(int port);
 
 /* declaration of queue manip functions */
 
-void removeq(queue_element_t* queue);
-void insertq(queue_element_t* queue, int fd, int isstatic);
+void removeq(queue_element_t* queue, int index);
+void insertq(queue_element_t* queue, int fd);
 queue_element_t selector(queue_element_t* queue);
 
 #endif /* __CSAPP_H__ */

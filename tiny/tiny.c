@@ -36,8 +36,16 @@ sem_t threadmutex;
 sem_t threadend;
 
 int main(int argc, char **argv) {
+    rio_t nullrio;
     NULL_ELEMENT.fd = 0;
     NULL_ELEMENT.isstatic = 0;
+    strcpy(NULL_ELEMENT.filename, "");
+    strcpy(NULL_ELEMENT.buf, "");
+    strcpy(NULL_ELEMENT.cgiargs, "");
+    strcpy(NULL_ELEMENT.method, "");
+    strcpy(NULL_ELEMENT.version, "");
+    strcpy(NULL_ELEMENT.uri, "");
+    NULL_ELEMENT.rio =  nullrio;
     sem_init(&qsizemutex, 0, 1);
     sem_init(&threadmutex, 0, 0);
     sem_init(&threadend, 0, 1);
@@ -85,15 +93,20 @@ int main(int argc, char **argv) {
     listenfd = Open_listenfd(port);
     while (connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen)) {
 
+
         //line:netp:tiny:accept  oldline - connfd = Accept (listenfd, (SA *) & clientaddr, &clientlen);
         //pthread_t t;
         int *pclient = malloc(sizeof(int));//client socket
 
         *pclient = connfd;
-        insertq(queue_element, *pclient, 1);
-        fflush(stdout);
+        if(queue_activesize >= queue_maxsize){
+            clienterror(*pclient, "BUSY", "400", "Server is busy", "Try later"); // nao funciona
+            Close(*pclient);
+            continue;
+        }
 
-        //is static doesnt matter for FIFO, the only method currently implemented
+        insertq(queue_element, *pclient);
+
         //sem_wait(&threadend);
         sem_post(&threadmutex);
         //pthread_create(&t, NULL, doit, pclient);
@@ -112,55 +125,64 @@ void *doit(void *args) {
     while (1) {
         sem_wait(&threadmutex);
         queue_element_t element;
-
         int id = *(int *) args;
         element = selector(queue_element);
         int fd = element.fd;
-        printf("FD %d id %d", fd, id);
         //free(p_fd);
-        int is_static;
+        int is_static = element.isstatic;
+
+        fflush(stdout);
         struct stat sbuf;
         char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
         char filename[MAXLINE], cgiargs[MAXLINE];
-        rio_t rio;
+        rio_t rio = element.rio;
+        strcpy(buf, element.buf);
+        strcpy(method, element.method);
+        strcpy(uri, element.uri);
+        strcpy(version, element.version);
+        strcpy(filename, element.filename);
+        strcpy(cgiargs, element.cgiargs);
 
 
-        if (queue_activesize >= queue_maxsize) {
+
+
+        /*if (queue_activesize >= queue_maxsize) {
             clienterror(fd, method, "400", "Bad Request", "Server is busy.");
             Close(fd);
             continue;
-        }
+        }*/
 
         /* Read request line and headers */
-        Rio_readinitb(&rio, fd);
+        /*Rio_readinitb(&rio, fd);
         Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
         sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
-
+        */
         if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
             clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
-
-
             Close(fd);
             continue;
         }
 
         //line:netp:doit:endrequesterr
-        read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs
+        //read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs CAUSES DEADLOCK, WHY? moved to insert
 
         /* Parse URI from GET request */
-        is_static = parse_uri(uri, filename, cgiargs);    //line:netp:doit:staticcheck
-        printf("DEBUG: THREAD before namecheck\n");
-        fflush(stdout);
+       /*is_static = parse_uri(uri, filename, cgiargs);*/    //line:netp:doit:staticcheck
+
         if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
             clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
             Close(fd);
             continue;
         }                //line:netp:doit:endnotfound
-        printf("DEBUG: THREAD after namecheck\n");
+
+
         fflush(stdout);
 
         if (is_static) {/* Serve static content */
-            if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {            //line:netp:doit:readable
+
+            if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
+                //line:netp:doit:readable
+                fflush(stdout);
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
                 Close(fd);
                 continue;
@@ -240,6 +262,7 @@ void serve_static(int fd, char *filename, int filesize) {
     int srcfd;
     char *srcp, filetype[MAXLINE], buf[MAXBUF];
 
+
     /* Send response headers to client */
     get_filetype(filename, filetype);    //line:netp:servestatic:getfiletype
     sprintf(buf, "HTTP/1.0 200 OK\r\n");    //line:netp:servestatic:beginserve
@@ -247,7 +270,10 @@ void serve_static(int fd, char *filename, int filesize) {
     sprintf(buf, "%sRequestStat: %d\r\n", buf, numeroRequestStat++);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
     sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+
+
     Rio_writen(fd, buf, strlen(buf));    //line:netp:servestatic:endserve
+
 
     /* Send response body to client */
     srcfd = Open(filename, O_RDONLY, 0);    //line:netp:servestatic:open
@@ -295,7 +321,6 @@ void serve_dynamic(int fd, char *filename, char *cgiargs) {
         setenv("QUERY_STRING", cgiargs, 1);    //line:netp:servedynamic:setenv
         //Dup2 (fd, STDOUT_FILENO);	/* Redirect stdout to client *///line:netp:servedynamic:dup2
         Dup2(pipefd[1], STDOUT_FILENO);
-
         Execve(filename, emptylist, environ);    /* Run CGI program *///line:netp:servedynamic:execve
     }
     close(pipefd[1]);
@@ -356,32 +381,87 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 /* queue manipulation */
 
 queue_element_t selector(queue_element_t *queue) {
-    int index;
     queue_element_t out;
     if (algorithm == 1) {
-        // STATIC IS HIGH PRIO
+        for(int i = 0; i + 1 <= queue_activesize; i++){
+            if(queue[i].isstatic == 1){
+                strcpy(out.buf, queue[i].buf);
+                strcpy(out.method, queue[i].method);
+                strcpy(out.uri, queue[i].uri);
+                strcpy(out.version, queue[i].version);
+                strcpy(out.filename, queue[i].filename);
+                strcpy(out.cgiargs, queue[i].cgiargs);
+                out.rio = queue[i].rio;
+                out.fd = queue[i].fd;
+                out.isstatic = queue[i].isstatic;
+                removeq(queue, i);
+                return out;
+            }
+        }
+        strcpy(out.buf, queue[0].buf);
+        strcpy(out.method, queue[0].method);
+        strcpy(out.uri, queue[0].uri);
+        strcpy(out.version, queue[0].version);
+        strcpy(out.filename, queue[0].filename);
+        strcpy(out.cgiargs, queue[0].cgiargs);
+        out.rio = queue[0].rio;
+        out.fd = queue[0].fd;
+        out.isstatic = queue[0].isstatic;
+        removeq(queue, 0);
+        return out;
     } else if (algorithm == 2) {
-        //DYNAMIC IS HIGH PRIO
+        for(int i = 0; i + 1 <= queue_activesize; i++){
+            if(queue[i].isstatic == 0){
+                strcpy(out.buf, queue[i].buf);
+                strcpy(out.method, queue[i].method);
+                strcpy(out.uri, queue[i].uri);
+                strcpy(out.version, queue[i].version);
+                strcpy(out.filename, queue[i].filename);
+                strcpy(out.cgiargs, queue[i].cgiargs);
+                out.rio = queue[i].rio;
+                out.fd = queue[i].fd;
+                out.isstatic = queue[i].isstatic;
+                removeq(queue, i);
+                return out;
+            }
+        }
+
+        strcpy(out.buf, queue[0].buf);
+        strcpy(out.method, queue[0].method);
+        strcpy(out.uri, queue[0].uri);
+        strcpy(out.version, queue[0].version);
+        strcpy(out.filename, queue[0].filename);
+        strcpy(out.cgiargs, queue[0].cgiargs);
+        out.rio = queue[0].rio;
+        out.fd = queue[0].fd;
+        out.isstatic = queue[0].isstatic;
+        removeq(queue, 0);
+        return out;
     } else {
-        queue_element_t out = queue[0];
-        removeq(queue);
+        strcpy(out.buf, queue[0].buf);
+        strcpy(out.method, queue[0].method);
+        strcpy(out.uri, queue[0].uri);
+        strcpy(out.version, queue[0].version);
+        strcpy(out.filename, queue[0].filename);
+        strcpy(out.cgiargs, queue[0].cgiargs);
+        out.rio = queue[0].rio;
+        out.fd = queue[0].fd;
+        out.isstatic = queue[0].isstatic;
+        removeq(queue, 0);
         return out;
 
     }
 
 }
 
-void removeq(queue_element_t *queue) { // ONLY WORKS FOR FIFO
+void removeq(queue_element_t *queue, int index) {
     sem_wait(&qsizemutex);
-    for (int i = 0; i + 1 <= queue_activesize; i++) {
-        if (i - 1 == queue_activesize) { // OUT OF BOUNDS
-            printf("\nremoving if, i %d as %d\n", i, queue_activesize);
-            fflush(stdout);
-            queue[i] = queue[i + 1];
-        } else {
-            printf("\nelse i %d\n", i);
-            fflush(stdout);
+
+    for (int i = index; i + 1 <= queue_activesize; i++) {
+        if (i + 1 == queue_activesize) { // OUT OF BOUNDS
             queue[i] = NULL_ELEMENT;
+        } else {
+            queue[i] = queue[i + 1];
         }
     }
     queue_activesize--;
@@ -389,15 +469,33 @@ void removeq(queue_element_t *queue) { // ONLY WORKS FOR FIFO
     return NULL;
 }
 
-void insertq(queue_element_t *queue, int fd, int isstatic) { //ONLY WORKS FOR FIFO
+void insertq(queue_element_t *queue, int fd) {
+
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    char filename[MAXLINE], cgiargs[MAXLINE];
+    rio_t rio;
+
+    Rio_readinitb(&rio, fd);
+    Rio_readlineb(&rio, buf, MAXLINE);    //line:netp:doit:readrequest
+    sscanf(buf, "%s %s %s", method, uri, version);    //line:netp:doit:parserequest
+    int isstatic = parse_uri(uri, filename, cgiargs);
+    read_requesthdrs(&rio); //works fine here, rio isnt crossing over from q to element properly?
 
     queue_element_t element;
+    strcpy(element.buf, buf);
     element.fd = fd;
     element.isstatic = isstatic;
+    strcpy(element.method, method);
+    strcpy(element.uri, uri);
+    strcpy(element.version, version);
+    strcpy(element.filename, filename);
+    strcpy(element.cgiargs, cgiargs);
+    element.rio = rio;
     sem_wait(&qsizemutex);
     queue[queue_activesize] = element;
     queue_activesize++;
     sem_post(&qsizemutex);
+
 
     return NULL;
 }
