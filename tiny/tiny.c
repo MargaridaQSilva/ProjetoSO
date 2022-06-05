@@ -23,6 +23,8 @@ void serve_dynamic(int fd, char *filename, char *cgiargs);
 
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
+struct timeval timediff(struct timeval stop);
+
 queue_element_t *queue_element;
 queue_element_t NULL_ELEMENT;
 
@@ -31,11 +33,18 @@ int THREADMAX = 1;
 int queue_activesize = 0;
 int queue_maxsize = 0;
 int algorithm = 0; //0 - ANY/FIFO 1 - HPSC  2 - HPDC
+int dispatchcount = 0, completecount = 0;
 sem_t qsizemutex;
 sem_t threadmutex;
-sem_t threadend;
+sem_t threadstats;
+
+struct timeval starttime;
 
 int main(int argc, char **argv) {
+    gettimeofday(&starttime, NULL);
+    int arrival_count = 0;
+    struct timeval arrival_time;
+
     rio_t nullrio;
     NULL_ELEMENT.fd = 0;
     NULL_ELEMENT.isstatic = 0;
@@ -45,10 +54,10 @@ int main(int argc, char **argv) {
     strcpy(NULL_ELEMENT.method, "");
     strcpy(NULL_ELEMENT.version, "");
     strcpy(NULL_ELEMENT.uri, "");
-    NULL_ELEMENT.rio =  nullrio;
+    NULL_ELEMENT.rio = nullrio;
     sem_init(&qsizemutex, 0, 1);
     sem_init(&threadmutex, 0, 0);
-    sem_init(&threadend, 0, 1);
+    sem_init(&threadstats, 0, 1);
     int listenfd, connfd, port;
     //change to unsigned as sizeof returns unsigned
     struct sockaddr_in clientaddr;
@@ -92,6 +101,13 @@ int main(int argc, char **argv) {
 
     listenfd = Open_listenfd(port);
     while (connfd = Accept(listenfd, (SA *) &clientaddr, &clientlen)) {
+        // !! STATS - NEW ARRIVAL
+        gettimeofday(&arrival_time, NULL);
+        arrival_count++;
+        arrival_time = timediff(arrival_time);
+        printf("Stat-req-arrival-count - %d\n", arrival_count);
+        printf("Stat-req-arrival-time - %ld seconds %ld microseconds\n", arrival_time.tv_sec, arrival_time.tv_usec);
+
 
 
         //line:netp:tiny:accept  oldline - connfd = Accept (listenfd, (SA *) & clientaddr, &clientlen);
@@ -99,7 +115,7 @@ int main(int argc, char **argv) {
         int *pclient = malloc(sizeof(int));//client socket
 
         *pclient = connfd;
-        if(queue_activesize >= queue_maxsize){
+        if (queue_activesize >= queue_maxsize) {
             clienterror(*pclient, "BUSY", "400", "Server is busy", "Try later"); // nao funciona
             Close(*pclient);
             continue;
@@ -107,7 +123,6 @@ int main(int argc, char **argv) {
 
         insertq(queue_element, *pclient);
 
-        //sem_wait(&threadend);
         sem_post(&threadmutex);
         //pthread_create(&t, NULL, doit, pclient);
         //Close(connfd);        //line:netp:tiny:close ->retirei este close devido ao erro Rio_readlineb error: Bad file descriptor
@@ -122,8 +137,12 @@ int main(int argc, char **argv) {
  */
 /* $begin doit */
 void *doit(void *args) {
+    struct timeval dispatch_time;
+    struct timeval complete_time;
+    int staticcount = 0, dynamiccount = 0;
     while (1) {
         sem_wait(&threadmutex);
+        printf("Stat-req-dispatch-count - %d\n", dispatchcount);
         queue_element_t element;
         int id = *(int *) args;
         element = selector(queue_element);
@@ -159,6 +178,12 @@ void *doit(void *args) {
         */
         if (strcasecmp(method, "GET")) {                //line:netp:doit:beginrequesterr
             clienterror(fd, method, "501", "Not Implemented", "Tiny does not implement this method");
+            sem_wait(&threadstats);
+            dispatchcount++;
+            sem_post(&threadstats);
+            gettimeofday(&dispatch_time, NULL);
+            dispatch_time = timediff(dispatch_time);
+            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
             Close(fd);
             continue;
         }
@@ -167,10 +192,16 @@ void *doit(void *args) {
         //read_requesthdrs(&rio);    //line:netp:doit:readrequesthdrs CAUSES DEADLOCK, WHY? moved to insert
 
         /* Parse URI from GET request */
-       /*is_static = parse_uri(uri, filename, cgiargs);*/    //line:netp:doit:staticcheck
+        /*is_static = parse_uri(uri, filename, cgiargs);*/    //line:netp:doit:staticcheck
 
         if (stat(filename, &sbuf) < 0) {                //line:netp:doit:beginnotfound
             clienterror(fd, filename, "404", "Not found", "Tiny couldn't find this file");
+            sem_wait(&threadstats);
+            dispatchcount++;
+            sem_post(&threadstats);
+            gettimeofday(&dispatch_time, NULL);
+            dispatch_time = timediff(dispatch_time);
+            printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
             Close(fd);
             continue;
         }                //line:netp:doit:endnotfound
@@ -184,24 +215,59 @@ void *doit(void *args) {
                 //line:netp:doit:readable
                 fflush(stdout);
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
+                sem_wait(&threadstats);
+                dispatchcount++;
+                sem_post(&threadstats);
+                gettimeofday(&dispatch_time, NULL);
+                dispatch_time = timediff(dispatch_time);
+                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
                 Close(fd);
                 continue;
             }
+            printf("Stat-req-complete-count (STATIC ONLY) - %d\n", completecount);
+            sem_wait(&threadstats);
+            completecount++;
+            sem_post(&threadstats);
             serve_static(fd, filename, sbuf.st_size);    //line:netp:doit:servestatic
+            gettimeofday(&complete_time, NULL);
+            complete_time = timediff(complete_time);
+            staticcount++;
+            printf("Thread ID: %d\n"
+                   "Stat-req-complete-time - %ld seconds %ld microseconds\n"
+                   "Stat-thread-count - %d\n"
+                   "Stat-thread-static - %d\n"
+                   "Stat-thread-dynamic - %d\n", id, complete_time.tv_sec, complete_time.tv_usec, staticcount+dynamiccount, staticcount, dynamiccount);
+
+
         } else {                /* Serve dynamic content */
             if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {            //line:netp:doit:executable
                 clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
-
+                sem_wait(&threadstats);
+                dispatchcount++;
+                sem_post(&threadstats);
+                gettimeofday(&dispatch_time, NULL);
+                dispatch_time = timediff(dispatch_time);
+                printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
                 Close(fd);
                 continue;
             }
 
             serve_dynamic(fd, filename, cgiargs);    //line:netp:doit:servedynamic
+            dynamiccount++;
+            printf("Thread ID: %d\n"
+                   "Stat-thread-count - %d\n"
+                   "Stat-thread-static - %d\n"
+                   "Stat-thread-dynamic - %d\n", id, staticcount+dynamiccount, staticcount, dynamiccount);
+
         }
 
         Close(fd);
-
-        //sem_post(&threadend);
+        sem_wait(&threadstats);
+        dispatchcount++;
+        sem_post(&threadstats);
+        gettimeofday(&dispatch_time, NULL);
+        dispatch_time = timediff(dispatch_time);
+        printf("Thread ID: %d\nStat-req-dispatch-time - %ld seconds %ld microseconds\n", id, dispatch_time.tv_sec, dispatch_time.tv_usec);
     }
 }
 
@@ -383,8 +449,8 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 queue_element_t selector(queue_element_t *queue) {
     queue_element_t out;
     if (algorithm == 1) {
-        for(int i = 0; i + 1 <= queue_activesize; i++){
-            if(queue[i].isstatic == 1){
+        for (int i = 0; i + 1 <= queue_activesize; i++) {
+            if (queue[i].isstatic == 1) {
                 strcpy(out.buf, queue[i].buf);
                 strcpy(out.method, queue[i].method);
                 strcpy(out.uri, queue[i].uri);
@@ -410,8 +476,8 @@ queue_element_t selector(queue_element_t *queue) {
         removeq(queue, 0);
         return out;
     } else if (algorithm == 2) {
-        for(int i = 0; i + 1 <= queue_activesize; i++){
-            if(queue[i].isstatic == 0){
+        for (int i = 0; i + 1 <= queue_activesize; i++) {
+            if (queue[i].isstatic == 0) {
                 strcpy(out.buf, queue[i].buf);
                 strcpy(out.method, queue[i].method);
                 strcpy(out.uri, queue[i].uri);
@@ -498,4 +564,17 @@ void insertq(queue_element_t *queue, int fd) {
 
 
     return NULL;
+}
+
+struct timeval timediff(struct timeval stop) {
+    struct timeval out;
+    long secs = stop.tv_sec - starttime.tv_sec;
+    long ms = stop.tv_usec - starttime.tv_usec;
+    if (ms < 0) {
+        secs--;
+        ms = 1e+6 + ms;
+    }
+    out.tv_sec = secs;
+    out.tv_usec = ms;
+    return out;
 }
